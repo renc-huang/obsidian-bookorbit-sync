@@ -40,6 +40,7 @@ interface BookOrbitSettings {
   includeMetadata: boolean;
   lastSyncTime: string;
   customProperties: string;
+  syncReadBooks: boolean;
   syncOnLaunch: boolean;
 }
 
@@ -52,6 +53,7 @@ const DEFAULT_SETTINGS: BookOrbitSettings = {
   includeMetadata: true,
   lastSyncTime: "",
   customProperties: "",
+  syncReadBooks: false,
   syncOnLaunch: true,
 };
 
@@ -113,7 +115,17 @@ export default class BookOrbitPlugin extends Plugin {
     try {
       const token = await this.login();
       const annotations = await this.fetchNewAnnotations(token);
-
+      
+      // Create notes for finished books that don't have one yet
+      if (this.settings.syncReadBooks) {
+        const libraryIds = await this.fetchLibraries(token);
+        for (const libraryId of libraryIds) {
+          const finishedBooks = await this.fetchFinishedBooks(libraryId, token);
+          for (const book of finishedBooks) {
+            await this.writeEmptyBookNote(book, token);
+          }
+        }
+      }
       if (annotations.length === 0) {
         new Notice("BookOrbit Sync: No new highlights.");
         return;
@@ -227,6 +239,56 @@ export default class BookOrbitPlugin extends Plugin {
     return allAnnotations;
   }
 
+  async fetchLibraries(token: string): Promise<number[]> {
+    const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
+    const url = `${baseUrl}/api/v1/libraries`;
+
+    const response = await requestUrl({
+      url,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      throw: false,
+    });
+
+    if (response.status !== 200) {
+      throw new Error(`Failed to fetch libraries (${response.status}).`);
+    }
+
+    const libraries = response.json;
+    return libraries.map((library: { id: number }) => library.id);
+  }
+
+  async fetchFinishedBooks(libraryId: number, token: string): Promise<any[]> {
+    const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
+    const url = `${baseUrl}/api/v1/libraries/${libraryId}/books`;
+    
+    const response = await requestUrl({
+      url,
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`,},
+      body: JSON.stringify({
+        sort: [{ field: "title", dir: "asc" }],
+        filter: {
+          type: "group",
+          join: "AND",
+          rules: [
+            { type: "rule", field: "readStatus", operator: "includesAny", value: ["read"] }
+         ]
+        },
+        collapseSeries: true,
+        pagination: { page: 0, size: 100 }
+      }),
+      throw: false,
+    });
+if (response.status !== 200 && response.status !== 201) {
+    throw new Error(`Failed to fetch books (${response.status}).`);
+  }
+    return response.json.items;
+  }
+
+
   groupByBook(annotations: Annotation[]): Record<string, Annotation[]> {
     const groups: Record<string, Annotation[]> = {};
 
@@ -270,6 +332,50 @@ export default class BookOrbitPlugin extends Plugin {
       const toAppend = this.buildHighlightsBlock(annotations);
       await this.app.vault.modify(file, existing + toAppend);
     }
+  }
+
+  async writeEmptyBookNote(book: any, token: string) {
+    const title: string = book.title;
+    const author: string = (book.authors ?? []).join(", ");
+    const safeTitle = title.replace(/[\\/:*?"<>|]/g, "-");
+    const safeAuthor = author.replace(/[\\/:*?"<>|]/g, "-");
+    const folderPath = normalizePath(this.settings.outputFolder);
+    const filePath = normalizePath(`${folderPath}/${safeTitle} - ${safeAuthor}.md`);
+    const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
+    const bookUrl = `${baseUrl}/books/${book.id}/highlights`;
+
+    await this.ensureFolder(folderPath);
+
+    // If a note for this book already exists (with or without highlights), leave it alone
+    const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+    if (existingFile) return;
+
+    const coverPath = await this.downloadCover(book.id, safeTitle, token);
+
+    const customProps = this.settings.customProperties
+      ? this.settings.customProperties + "\n"
+      : "";
+    const coverProperty = coverPath
+      ? `cover: "[[${coverPath}]]"\n`
+      : "";
+    const now = new Date().toISOString();
+
+    const content = `---
+title: "${title}"
+author: "${author}"
+bookorbit_book_id: ${book.id}
+bookorbit_url: ${bookUrl}
+last_synced: ${now}
+${coverProperty}${customProps}---
+
+# ${title}
+*${author}*
+
+[View in BookOrbit](${bookUrl})
+
+`;
+
+    await this.app.vault.create(filePath, content);
   }
 
 // Defines what will be shown in the full exported file
@@ -468,6 +574,18 @@ class BookOrbitSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       });
+
+    new Setting (containerEl)
+      .setName("Sync read books?")
+      .setDesc("Create a note for all books marked as Read on BookOrbit, even if they have no highlights.")
+      .addToggle((toggle) =>
+        toggle
+        .setValue(this.plugin.settings.syncReadBooks)
+        .onChange(async (value) => {
+          this.plugin.settings.syncReadBooks = value;
+          await this.plugin.saveSettings();
+          })
+        );
 
     new Setting(containerEl)
       .setName("Sync on launch?")
