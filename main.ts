@@ -315,7 +315,7 @@ if (response.status !== 200 && response.status !== 201) {
     const safeAuthor = first.author.replace(/[\\/:*?"<>|]/g, "-");
     const filePath = normalizePath(`${folderPath}/${safeTitle} - ${safeAuthor}.md`);
     const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
-    const bookUrl = `${baseUrl}/books/${first.bookId}/highlights`;
+    const bookUrl = `${baseUrl}/annotations?bookId=${first.bookId}`;
 
     await this.ensureFolder(folderPath);
 
@@ -342,7 +342,7 @@ if (response.status !== 200 && response.status !== 201) {
     const folderPath = normalizePath(this.settings.outputFolder);
     const filePath = normalizePath(`${folderPath}/${safeTitle} - ${safeAuthor}.md`);
     const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
-    const bookUrl = `${baseUrl}/books/${book.id}/highlights`;
+    const bookUrl = `${baseUrl}/annotations?bookId=${book.id}`;
 
     await this.ensureFolder(folderPath);
 
