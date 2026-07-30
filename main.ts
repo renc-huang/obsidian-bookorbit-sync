@@ -298,12 +298,16 @@ if (response.status !== 200 && response.status !== 201) {
       groups[key].push(annotation);
     }
 
-    for (const key of Object.keys(groups)) {
-      groups[key].sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
+for (const key of Object.keys(groups)) {
+  groups[key].sort((a, b) => {
+    if (a.pageno !== null && b.pageno === null) return -1;
+    if (a.pageno === null && b.pageno !== null) return 1;
+    if (a.pageno !== null && b.pageno !== null && a.pageno !== b.pageno) {
+      return a.pageno - b.pageno;
     }
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+}
 
     return groups;
   }
