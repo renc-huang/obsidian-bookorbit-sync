@@ -152,11 +152,12 @@ export default class BookOrbitPlugin extends Plugin {
     }
   }
 
-  async login(): Promise<string> {
-    const url = `${this.settings.serverUrl.replace(/\/$/, "")}/api/v1/auth/login`;
+async login(): Promise<string> {
+    const baseUrl = this.settings.serverUrl.replace(/\/$/, "");
 
-    const response = await requestUrl({
-      url,
+    // Step 1: log in with username/password to get a refresh_token cookie
+    const loginResponse = await requestUrl({
+      url: `${baseUrl}/api/v1/auth/login`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -166,31 +167,49 @@ export default class BookOrbitPlugin extends Plugin {
       throw: false,
     });
 
-    if (response.status !== 200) {
+    if (loginResponse.status !== 200) {
       throw new Error(
-        `Login failed (${response.status}). Check your credentials in settings.`
+        `Login failed (${loginResponse.status}). Check your credentials in settings.`
       );
     }
 
-    // Try JSON body first
-    const data = response.json;
-    if (data?.access_token) {
-      return data.access_token;
-    }
-
-    // BookOrbit sends the token as a Set-Cookie header instead
-    // The header may come back as a string or an array of strings
-    const rawCookies = response.headers["set-cookie"] ?? "";
+    const rawCookies = loginResponse.headers["set-cookie"] ?? "";
     const cookieString = Array.isArray(rawCookies)
       ? rawCookies.join("; ")
       : String(rawCookies);
-    const match = cookieString.match(/access_token=([^;]+)/);
-    if (match) {
-      return match[1];
+
+    const refreshMatch = cookieString.match(/refresh_token=([^;]+)/);
+    if (!refreshMatch) {
+      console.error("BookOrbit Sync: Could not extract refresh token. Headers:", loginResponse.headers);
+      throw new Error("Could not extract refresh token from login response.");
+    }
+    const refreshToken = refreshMatch[1];
+
+    // Step 2: exchange the refresh_token for an access token via a clean JSON response
+    // (more reliable across platforms than reading access_token from a second Set-Cookie header)
+    const refreshResponse = await requestUrl({
+      url: `${baseUrl}/api/v1/auth/refresh`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `refresh_token=${refreshToken}`,
+      },
+      throw: false,
+    });
+
+    if (refreshResponse.status !== 200) {
+      throw new Error(
+        `Failed to refresh access token (${refreshResponse.status}).`
+      );
     }
 
-    console.error("BookOrbit Sync: Could not extract access token. Headers:", response.headers);
-    throw new Error("Could not extract access token from login response.");
+    const refreshData = refreshResponse.json;
+    if (!refreshData?.accessToken) {
+      console.error("BookOrbit Sync: Refresh response missing accessToken:", refreshData);
+      throw new Error("Refresh response did not contain an access token.");
+    }
+
+    return refreshData.accessToken;
   }
 
   async fetchNewAnnotations(token: string): Promise<Annotation[]> {
