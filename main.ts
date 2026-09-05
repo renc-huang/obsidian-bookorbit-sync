@@ -46,6 +46,7 @@ interface BookOrbitSettings {
   syncOnLaunch: boolean;
   readerLinks: boolean;
   downloadCovers: boolean;
+  colorTags: string;
 }
 
 // Defines the default settings for the plugin on install
@@ -61,6 +62,7 @@ const DEFAULT_SETTINGS: BookOrbitSettings = {
   syncOnLaunch: true,
   readerLinks: true,
   downloadCovers: true,
+  colorTags: "",
 };
 
 export default class BookOrbitPlugin extends Plugin {
@@ -452,8 +454,27 @@ ${coverProperty}${customProps}---
     return `${baseUrl}/read/${annotation.bookId}/${annotation.jumpFileId}?${params.toString()}`;
   }
 
+  /**
+   * Parses the "Colour tags" setting (one `#hex = tag` pair per line) into a lookup map.
+   * Keys are lower-cased hex colours; values are tags without the leading '#'.
+   */
+  parseColorTags(): Record<string, string> {
+    const map: Record<string, string> = {};
+    for (const raw of this.settings.colorTags.split("\n")) {
+      const line = raw.trim();
+      if (!line || line.startsWith("//")) continue;
+      const idx = line.indexOf("=");
+      if (idx === -1) continue;
+      const hex = line.slice(0, idx).trim().toLowerCase();
+      const tag = line.slice(idx + 1).trim().replace(/^#/, "");
+      if (hex && tag) map[hex] = tag;
+    }
+    return map;
+  }
+
   buildHighlightsBlock(annotations: Annotation[]): string {
     let block = "";
+    const colorTags = this.parseColorTags();
 
     for (const annotation of annotations) {
       const date = this.formatDate(annotation.createdAt);
@@ -470,11 +491,13 @@ ${coverProperty}${customProps}---
 
       const link = this.settings.readerLinks ? this.readerLink(annotation) : null;
       const linkPart = link ? ` · [Open in reader](${link})` : "";
+      const tag = colorTags[(annotation.color ?? "").toLowerCase()];
+      const tagPart = tag ? ` #${tag}` : "";
 
       if (this.settings.includeMetadata){
-      block += `*${source} · ${date} · ${chapter}${page}<span style="color: ${annotation.color};">●</span>${linkPart}*\n\n`;
-      } else if (linkPart) {
-      block += `*${linkPart.slice(3)}*\n\n`;
+      block += `*${source} · ${date} · ${chapter}${page}<span style="color: ${annotation.color};">●</span>${linkPart}*${tagPart}\n\n`;
+      } else if (linkPart || tagPart) {
+      block += `${linkPart ? `*${linkPart.slice(3)}*` : ""}${tagPart}\n\n`;
       }
     }
 
@@ -667,6 +690,19 @@ class BookOrbitSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.downloadCovers)
         .onChange(async (value) => {
           this.plugin.settings.downloadCovers = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Colour tags")
+      .setDesc("Map highlight colours to Obsidian tags, one per line as `#hex = tag` (e.g. `#FACC15 = hl/cite`). Matching highlights get the tag appended so they can be queried.")
+      .addTextArea((text) =>
+        text
+        .setPlaceholder("#FACC15 = hl/cite\n#4ADE80 = hl/agree")
+        .setValue(this.plugin.settings.colorTags)
+        .onChange(async (value) => {
+          this.plugin.settings.colorTags = value;
           await this.plugin.saveSettings();
         })
       );
